@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>🐙 卡通小章鱼 · 悠闲游动 + 眨眼拖拽</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            min-height: 100vh;
+            background: linear-gradient(145deg, #52b3d9 0%, #1f6d8c 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', 'Quicksand', 'Comic Neue', 'Poppins', system-ui, sans-serif;
+            padding: 20px;
+        }
+
+        .game-container {
+            background: rgba(255, 248, 225, 0.2);
+            border-radius: 70px;
+            padding: 20px 25px 25px 25px;
+            backdrop-filter: blur(2px);
+            box-shadow: 0 20px 35px rgba(0,0,0,0.3);
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 60px;
+            box-shadow: 0 18px 28px rgba(0,0,0,0.4), inset 0 1px 4px rgba(255,255,200,0.6);
+            cursor: grab;
+            transition: box-shadow 0.1s ease;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 22px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .cute-btn {
+            background: #ffecd6;
+            border: none;
+            font-size: 1.2rem;
+            font-weight: bold;
+            padding: 8px 22px;
+            border-radius: 60px;
+            font-family: inherit;
+            color: #b33f2e;
+            cursor: pointer;
+            box-shadow: 0 6px 0 #b37b6e;
+            transition: 0.08s linear;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: 1px;
+        }
+        .cute-btn:active {
+            transform: translateY(3px);
+            box-shadow: 0 3px 0 #b37b6e;
+        }
+
+        .info-tip {
+            background: rgba(0,0,0,0.4);
+            border-radius: 60px;
+            padding: 6px 16px;
+            color: #fff5e6;
+            font-size: 0.85rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .info-tip span {
+            font-size: 1.2rem;
+        }
+
+        @media (max-width: 680px) {
+            .game-container { padding: 12px; }
+            .cute-btn { font-size: 0.9rem; padding: 5px 16px; }
+            .info-tip { font-size: 0.7rem; }
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="game-container">
+        <canvas id="octopusCanvas" width="650" height="650" style="width:100%; height:auto; max-width:650px; aspect-ratio:1/1"></canvas>
+        <div class="controls">
+            <button class="cute-btn" id="startActionBtn">🐙 戳戳章鱼 ✨</button>
+            <div class="info-tip">
+                <span>👆 点击章鱼 → 眨眼</span>
+                <span>🖱️ 拖动身体 → 移动</span>
+                <span>🌊 无人操作时 → 悠闲游动</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        // ------ 画布设置 ------
+        const canvas = document.getElementById('octopusCanvas');
+        const ctx = canvas.getContext('2d');
+        const size = 650;          // 画布尺寸 650x650
+        canvas.width = size;
+        canvas.height = size;
+        
+        // ------ 章鱼核心参数 ------
+        let octopusCenter = { x: size/2, y: size/2 + 8 };  // 初始重心 (325, 333)
+        const HEAD_RADIUS = 128;      // 脑袋圆润
+        const TENTACLE_COUNT = 8;
+        
+        // 触手区域参数
+        const startAngles = [];
+        const angleStart = Math.PI / 5;      // 36°
+        const angleEnd = (Math.PI * 4) / 5;   // 144°
+        const step = (angleEnd - angleStart) / (TENTACLE_COUNT - 1);
+        for (let i = 0; i < TENTACLE_COUNT; i++) {
+            startAngles.push(angleStart + i * step);
+        }
+        
+        // 每条触手的摆动个性 (更Q弹)
+        const tentacleProps = [];
+        for (let i = 0; i < TENTACLE_COUNT; i++) {
+            const angle = startAngles[i];
+            const t = (angle - angleStart) / (angleEnd - angleStart);
+            let baseDir = 0;
+            if (t < 0.35) baseDir = 0.65;
+            else if (t > 0.65) baseDir = -0.65;
+            else baseDir = 0.2;
+            tentacleProps.push({
+                baseDir: baseDir,
+                amplitude: 0.7 + Math.random() * 0.6,
+                phaseShift: Math.random() * Math.PI * 2,
+                lengthFactor: 0.85 + Math.random() * 0.3,
+                extraWobble: Math.random() * 0.8
+            });
+        }
+        
+        // ----- 眨眼动画控制 -----
+        let blinkFrames = 0;        // >0 眨眼动画
+        const BLINK_DURATION = 6;
+        
+        // ----- 拖拽控制 & 自动游动 -----
+        let isDragging = false;
+        let dragStartPoint = { x: 0, y: 0 };
+        let dragStartCenter = { x: 0, y: 0 };
+        
+        // ----- 自动游动系统 (无鼠标控制时悠闲移动) -----
+        let autoMoveEnabled = true;      // 是否允许自动游动
+        let velocity = { x: 0, y: 0 };
+        const MAX_SPEED = 0.95;
+        const SPEED_STEP = 0.12;
+        // 随机改变方向的时间计数器
+        let changeDirCounter = 0;
+        let changeDirInterval = 80;      // 大约80帧改变一次方向 (约1.3秒)
+        
+        function initAutoMove() {
+            // 随机初始速度
+            velocity = {
+                x: (Math.random() - 0.5) * MAX_SPEED * 0.8,
+                y: (Math.random() - 0.5) * MAX_SPEED * 0.6
+            };
+            changeDirCounter = Math.floor(Math.random() * 50) + 30;
+        }
+        
+        // 更新自动游动位置 (仅在 autoMoveEnabled && !isDragging 时调用)
+        function updateAutoMovement() {
+            if (!autoMoveEnabled) return;
+            if (isDragging) return;   // 拖拽时禁止自动移动
+            
+            // 随机改变方向 (让游动看起来更自然)
+            changeDirCounter--;
+            if (changeDirCounter <= 0) {
+                // 随机改变速度方向和大小
+                const angleChange = (Math.random() - 0.5) * 1.2;
+                const speed = Math.hypot(velocity.x, velocity.y);
+                let newAngle = Math.atan2(velocity.y, velocity.x) + angleChange;
+                // 新速度大小: 保持适中 0.3~0.9 之间
+                let newSpeed = Math.min(MAX_SPEED, Math.max(0.45, speed + (Math.random() - 0.5) * 0.25));
+                velocity.x = Math.cos(newAngle) * newSpeed;
+                velocity.y = Math.sin(newAngle) * newSpeed;
+                changeDirCounter = 55 + Math.floor(Math.random() * 60);
+            }
+            
+            // 边界反弹逻辑 (保留头部半径边距)
+            let newX = octopusCenter.x + velocity.x;
+            let newY = octopusCenter.y + velocity.y;
+            const minX = HEAD_RADIUS + 18;
+            const maxX = canvas.width - HEAD_RADIUS - 18;
+            const minY = HEAD_RADIUS + 15;
+            const maxY = canvas.height - HEAD_RADIUS + 5;
+            
+            if (newX < minX) {
+                newX = minX + (minX - newX);
+                velocity.x = Math.abs(velocity.x) * 0.85;
+            }
+            if (newX > maxX) {
+                newX = maxX - (newX - maxX);
+                velocity.x = -Math.abs(velocity.x) * 0.85;
+            }
+            if (newY < minY) {
+                newY = minY + (minY - newY);
+                velocity.y = Math.abs(velocity.y) * 0.85;
+            }
+            if (newY > maxY) {
+                newY = maxY - (newY - maxY);
+                velocity.y = -Math.abs(velocity.y) * 0.85;
+            }
+            
+            octopusCenter.x = newX;
+            octopusCenter.y = newY;
+            
+            // 避免速度过小卡死
+            if (Math.abs(velocity.x) < 0.08 && Math.abs(velocity.y) < 0.08) {
+                velocity.x += (Math.random() - 0.5) * 0.25;
+                velocity.y += (Math.random() - 0.5) * 0.25;
+                let mag = Math.hypot(velocity.x, velocity.y);
+                if (mag > MAX_SPEED) {
+                    velocity.x = (velocity.x / mag) * MAX_SPEED;
+                    velocity.y = (velocity.y / mag) * MAX_SPEED;
+                }
+            }
+        }
+        
+        // 拖拽时停止自动移动, 松开后重新开启自动移动并给一个小速度
+        function pauseAutoMove() {
+            autoMoveEnabled = false;
+        }
+        
+        function resumeAutoMove() {
+            autoMoveEnabled = true;
+            // 拖拽结束后赋予一个小速度延续悠闲感，避免原地不动
+            if (!isDragging) {
+                // 如果速度太小，给一点随机漂移
+                if (Math.hypot(velocity.x, velocity.y) < 0.2) {
+                    velocity.x = (Math.random() - 0.5) * 0.7;
+                    velocity.y = (Math.random() - 0.5) * 0.6;
+                }
+                changeDirCounter = 15; // 快速调整一下方向
+            }
+        }
+        
+        // ----- 辅助函数: 贝塞尔曲线取点(吸盘用)-----
+        function bezierPoint(p0, p1, p2, p3, t) {
+            const mt = 1 - t;
+            const x = mt * mt * mt * p0.x + 3 * mt * mt * t * p1.x + 3 * mt * t * t * p2.x + t * t * t * p3.x;
+            const y = mt * mt * mt * p0.y + 3 * mt * mt * t * p1.y + 3 * mt * t * t * p2.y + t * t * t * p3.y;
+            return { x, y };
+        }
+        
+        // 绘制单条卡通触手 (可爱胖手)
+        function drawTentacle(startX, startY, baseAngle, idx, time) {
+            const prop = tentacleProps[idx];
+            const lenScale = 0.92 + prop.lengthFactor * 0.2;
+            const tentacleLen = 86 * lenScale;
+            const tVal = (baseAngle - angleStart) / (angleEnd - angleStart);
+            const outwardOffset = (tVal - 0.5) * 0.75;
+            const endAngle = baseAngle + 0.45 + outwardOffset * 0.7;
+            const endX = startX + Math.cos(endAngle) * tentacleLen;
+            const endY = startY + Math.sin(endAngle) * tentacleLen;
+            
+            const sway = Math.sin(time * 2.4 + prop.phaseShift) * 0.32 * prop.amplitude;
+            const sway2 = Math.sin(time * 1.8 + prop.phaseShift + 1.1) * 0.23 * prop.amplitude;
+            
+            const radialDirX = Math.cos(baseAngle);
+            const radialDirY = Math.sin(baseAngle);
+            const perpX = -Math.sin(baseAngle);
+            const perpY = Math.cos(baseAngle);
+            
+            let totalBend = prop.baseDir + sway * 0.9;
+            const ctrl1Dist = tentacleLen * 0.45;
+            let ctrl1X = startX + radialDirX * ctrl1Dist + perpX * totalBend * 30;
+            let ctrl1Y = startY + radialDirY * ctrl1Dist + perpY * totalBend * 30;
+            
+            const bend2 = (prop.baseDir * 0.5) + sway2 * 0.85;
+            const ctrl2Dist = tentacleLen * 0.72;
+            let ctrl2X = startX + radialDirX * ctrl2Dist + perpX * bend2 * 34;
+            let ctrl2Y = startY + radialDirY * ctrl2Dist + perpY * bend2 * 34;
+            
+            const tipWobbleX = Math.sin(time * 2.9 + prop.phaseShift) * 5;
+            const tipWobbleY = Math.cos(time * 2.3 + prop.phaseShift) * 4;
+            const finalEndX = endX + tipWobbleX * 0.6;
+            const finalEndY = endY + tipWobbleY * 0.6;
+            
+            // 胖触手渐变
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.bezierCurveTo(ctrl1X, ctrl1Y, ctrl2X, ctrl2Y, finalEndX, finalEndY);
+            ctx.lineWidth = 21;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            const gradTent = ctx.createLinearGradient(startX, startY, finalEndX, finalEndY);
+            gradTent.addColorStop(0, '#FFA28B');
+            gradTent.addColorStop(1, '#FF7A62');
+            ctx.strokeStyle = gradTent;
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = "rgba(0,0,0,0.15)";
+            ctx.stroke();
+            // 加深轮廓
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.bezierCurveTo(ctrl1X, ctrl1Y, ctrl2X, ctrl2Y, finalEndX, finalEndY);
+            ctx.lineWidth = 3.5;
+            ctx.strokeStyle = '#C95946';
+            ctx.stroke();
+            
+            // 吸盘 (Q弹)
+            const points = [0.2, 0.36, 0.52, 0.69, 0.84];
+            const p0 = { x: startX, y: startY };
+            const p1 = { x: ctrl1X, y: ctrl1Y };
+            const p2 = { x: ctrl2X, y: ctrl2Y };
+            const p3 = { x: finalEndX, y: finalEndY };
+            
+            for (let p of points) {
+                const pt = bezierPoint(p0, p1, p2, p3, p);
+                const sz = 5.2 * (1 - p * 0.4);
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, sz, 0, Math.PI*2);
+                ctx.fillStyle = '#FFD3BD';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, sz*0.55, 0, Math.PI*2);
+                ctx.fillStyle = '#E87058';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(pt.x-1.2, pt.y-1.2, sz*0.3, 0, Math.PI*2);
+                ctx.fillStyle = '#FFF2E0';
+                ctx.fill();
+            }
+            const tipPt = bezierPoint(p0, p1, p2, p3, 0.96);
+            ctx.beginPath();
+            ctx.arc(tipPt.x, tipPt.y, 6.8, 0, Math.PI*2);
+            ctx.fillStyle = '#FF866E';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(tipPt.x-1, tipPt.y-1, 2.5, 0, Math.PI*2);
+            ctx.fillStyle = '#FFF1E0';
+            ctx.fill();
+        }
+        
+        // 绘制卡通章鱼主体 (无斑点版本)
+        function drawOctopus(time) {
+            if (!ctx) return;
+            const cx = octopusCenter.x;
+            const cy = octopusCenter.y;
+            
+            // 海底背景
+            const bgGrad = ctx.createLinearGradient(0, 0, 0, size);
+            bgGrad.addColorStop(0, '#69c0e0');
+            bgGrad.addColorStop(0.7, '#3d9fc7');
+            bgGrad.addColorStop(1, '#176e8f');
+            ctx.fillStyle = bgGrad;
+            ctx.fillRect(0, 0, size, size);
+            // 漂浮气泡
+            ctx.fillStyle = 'rgba(255,255,230,0.2)';
+            for (let i=0;i<60;i++) {
+                ctx.beginPath();
+                ctx.arc( (i*131)%size, (i*79 + Math.sin(time+i)*6)%size, 2+(i%6), 0, Math.PI*2);
+                ctx.fill();
+            }
+            
+            // 先画触手
+            for (let i=0; i<TENTACLE_COUNT; i++) {
+                const angle = startAngles[i];
+                const startX = cx + Math.cos(angle) * HEAD_RADIUS;
+                const startY = cy + Math.sin(angle) * HEAD_RADIUS;
+                drawTentacle(startX, startY, angle, i, time);
+            }
+            
+            // 头部
+            ctx.shadowBlur = 8;
+            ctx.shadowColor = "rgba(0,0,0,0.2)";
+            const headGrad = ctx.createRadialGradient(cx-20, cy-25, 18, cx, cy, HEAD_RADIUS+5);
+            headGrad.addColorStop(0, '#FFC2AD');
+            headGrad.addColorStop(0.6, '#FF927C');
+            headGrad.addColorStop(1, '#F26E58');
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, HEAD_RADIUS, HEAD_RADIUS*0.96, 0, 0, Math.PI*2);
+            ctx.fillStyle = headGrad;
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, HEAD_RADIUS, HEAD_RADIUS*0.96, 0, 0, Math.PI*2);
+            ctx.strokeStyle = '#C54E3A';
+            ctx.lineWidth = 2.8;
+            ctx.stroke();
+            // 额头高光
+            ctx.beginPath();
+            ctx.ellipse(cx-22, cy-38, 24, 18, 0, 0, Math.PI*2);
+            ctx.fillStyle = 'rgba(255,235,205,0.45)';
+            ctx.fill();
+            
+            // 大眼睛 (带眨眼)
+            const eyeOffsetX = 52;
+            const eyeOffsetY = 28;
+            const leftEyeX = cx - eyeOffsetX;
+            const rightEyeX = cx + eyeOffsetX;
+            const eyeY = cy - eyeOffsetY;
+            const eyeRadius = 28;
+            const isBlinkingNow = blinkFrames > 0;
+            let eyeScaleY = 1;
+            if (isBlinkingNow) eyeScaleY = 0.12;
+            
+            ctx.shadowBlur = 3;
+            ctx.beginPath();
+            ctx.ellipse(leftEyeX, eyeY, eyeRadius, eyeRadius * eyeScaleY * 1.05, 0, 0, Math.PI*2);
+            ctx.fillStyle = '#FFF8EF';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(rightEyeX, eyeY, eyeRadius, eyeRadius * eyeScaleY * 1.05, 0, 0, Math.PI*2);
+            ctx.fill();
+            
+            if (!isBlinkingNow) {
+                const pupilRad = 16;
+                ctx.beginPath();
+                ctx.ellipse(leftEyeX-4, eyeY+2, pupilRad, pupilRad*1.1, 0, 0, Math.PI*2);
+                ctx.fillStyle = '#2D2B3A';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(rightEyeX-4, eyeY+2, pupilRad, pupilRad*1.1, 0, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(leftEyeX-11, eyeY-6, 5.5, 0, Math.PI*2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(rightEyeX-11, eyeY-6, 5.5, 0, Math.PI*2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(leftEyeX+4, eyeY+6, 3, 0, Math.PI*2);
+                ctx.fillStyle = '#FFFAD0';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(rightEyeX+4, eyeY+6, 3, 0, Math.PI*2);
+                ctx.fill();
+            } else {
+                ctx.beginPath();
+                ctx.ellipse(leftEyeX, eyeY-2, eyeRadius*0.7, 4, 0, 0, Math.PI*2);
+                ctx.fillStyle = '#B34D3A';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(rightEyeX, eyeY-2, eyeRadius*0.7, 4, 0, 0, Math.PI*2);
+                ctx.fill();
+                for (let i=-1; i<=1; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(leftEyeX + i*12, eyeY-8);
+                    ctx.lineTo(leftEyeX + i*14, eyeY-18);
+                    ctx.lineWidth = 2.5;
+                    ctx.strokeStyle = '#A54130';
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(rightEyeX + i*12, eyeY-8);
+                    ctx.lineTo(rightEyeX + i*14, eyeY-18);
+                    ctx.stroke();
+                }
+            }
+            
+            // 腮红
+            const blushSize = 14 + Math.sin(time * 2) * 1.5;
+            ctx.beginPath();
+            ctx.ellipse(cx-70, cy+18, blushSize, blushSize*0.7, 0, 0, Math.PI*2);
+            ctx.fillStyle = '#FFA5A5';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(cx+70, cy+18, blushSize, blushSize*0.7, 0, 0, Math.PI*2);
+            ctx.fill();
+            
+            // 微笑大嘴
+            ctx.beginPath();
+            ctx.arc(cx, cy+32, 38, 0.08, Math.PI - 0.08);
+            ctx.strokeStyle = '#C2412F';
+            ctx.lineWidth = 5;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.ellipse(cx+8, cy+46, 7, 9, 0, 0, Math.PI*2);
+            ctx.fillStyle = '#FF6B5B';
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(cx-3, cy+44, 4, 6, 0, 0, Math.PI*2);
+            ctx.fillStyle = '#FF9585';
+            ctx.fill();
+            
+            // 蝴蝶结
+            const bowX = cx;
+            const bowY = cy - 78;
+            ctx.fillStyle = '#FF87AB';
+            ctx.shadowBlur = 4;
+            ctx.beginPath();
+            ctx.ellipse(bowX-22, bowY-5, 19, 12, -0.4, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(bowX+22, bowY-5, 19, 12, 0.4, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(bowX, bowY-2, 14, 14, 0, 0, Math.PI*2);
+            ctx.fillStyle = '#FF6F95';
+            ctx.fill();
+            ctx.fillStyle = '#FED0DE';
+            ctx.beginPath();
+            ctx.ellipse(bowX-12, bowY-8, 6, 5, 0, 0, Math.PI*2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(bowX+12, bowY-8, 6, 5, 0, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+        }
+        
+        // 眨眼触发
+        function triggerBlink() {
+            blinkFrames = BLINK_DURATION;
+        }
+        
+        // 检测是否点击到章鱼头部
+        function isHitOnOctopus(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const canvasX = (clientX - rect.left) * scaleX;
+            const canvasY = (clientY - rect.top) * scaleY;
+            const dx = canvasX - octopusCenter.x;
+            const dy = canvasY - octopusCenter.y;
+            return Math.hypot(dx, dy) <= HEAD_RADIUS + 12;
+        }
+        
+        // ----- 鼠标/触摸拖拽逻辑 (带自动游动暂停/恢复)-----
+        function onMouseDown(e) {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+            if (Math.hypot(mouseX - octopusCenter.x, mouseY - octopusCenter.y) <= HEAD_RADIUS + 15) {
+                isDragging = true;
+                pauseAutoMove();      // 拖拽时暂停自动游动
+                dragStartPoint = { x: mouseX, y: mouseY };
+                dragStartCenter = { x: octopusCenter.x, y: octopusCenter.y };
+                canvas.style.cursor = 'grabbing';
+            }
+        }
+        
+        function onMouseMove(e) {
+            if (!isDragging) return;
+            const rect = canvas.getBoundingClientRect();
+            const currentX = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const currentY = (e.clientY - rect.top) * (canvas.height / rect.height);
+            let deltaX = currentX - dragStartPoint.x;
+            let deltaY = currentY - dragStartPoint.y;
+            let newX = dragStartCenter.x + deltaX;
+            let newY = dragStartCenter.y + deltaY;
+            const minX = HEAD_RADIUS + 18;
+            const maxX = canvas.width - HEAD_RADIUS - 18;
+            const minY = HEAD_RADIUS + 15;
+            const maxY = canvas.height - HEAD_RADIUS + 5;
+            octopusCenter.x = Math.min(maxX, Math.max(minX, newX));
+            octopusCenter.y = Math.min(maxY, Math.max(minY, newY));
+        }
+        
+        function onMouseUp(e) {
+            if (isDragging) {
+                isDragging = false;
+                canvas.style.cursor = 'grab';
+                resumeAutoMove();    // 恢复自动游动
+            }
+        }
+        
+        function onCanvasClick(e) {
+            if (isHitOnOctopus(e.clientX, e.clientY)) {
+                triggerBlink();
+            }
+        }
+        
+        // 按钮互动
+        function onStartButtonClick() {
+            triggerBlink();
+            // 加个瞬移抖动小效果
+            const oldX = octopusCenter.x, oldY = octopusCenter.y;
+            let shakeCount = 0;
+            const interval = setInterval(() => {
+                if (shakeCount < 3) {
+                    octopusCenter.x = oldX + (Math.random() - 0.5) * 4;
+                    octopusCenter.y = oldY + (Math.random() - 0.5) * 3;
+                    shakeCount++;
+                } else {
+                    octopusCenter.x = oldX;
+                    octopusCenter.y = oldY;
+                    clearInterval(interval);
+                }
+            }, 20);
+        }
+        
+        // 更新眨眼计时
+        function updateBlink() {
+            if (blinkFrames > 0) blinkFrames--;
+        }
+        
+        // 动画主循环
+        let animationTime = 0;
+        let animFrameId = null;
+        
+        function animate(nowMs) {
+            const nowSec = performance.now() / 1000;
+            animationTime = nowSec;
+            updateBlink();
+            updateAutoMovement();    // 自动游动更新 (内部判断是否拖拽或启用)
+            drawOctopus(animationTime);
+            animFrameId = requestAnimationFrame(animate);
+        }
+        
+        // 初始化事件和自动移动
+        function initEvents() {
+            canvas.addEventListener('mousedown', onMouseDown);
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('click', onCanvasClick);
+            // 触摸事件
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                if (isHitOnOctopus(touch.clientX, touch.clientY)) triggerBlink();
+                const rect = canvas.getBoundingClientRect();
+                const touchX = (touch.clientX - rect.left) * (canvas.width / rect.width);
+                const touchY = (touch.clientY - rect.top) * (canvas.height / rect.height);
+                if (Math.hypot(touchX - octopusCenter.x, touchY - octopusCenter.y) <= HEAD_RADIUS + 15) {
+                    isDragging = true;
+                    pauseAutoMove();
+                    dragStartPoint = { x: touchX, y: touchY };
+                    dragStartCenter = { x: octopusCenter.x, y: octopusCenter.y };
+                    canvas.style.cursor = 'grabbing';
+                }
+            });
+            canvas.addEventListener('touchmove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = canvas.getBoundingClientRect();
+                const currentX = (touch.clientX - rect.left) * (canvas.width / rect.width);
+                const currentY = (touch.clientY - rect.top) * (canvas.height / rect.height);
+                let deltaX = currentX - dragStartPoint.x;
+                let deltaY = currentY - dragStartPoint.y;
+                let newX = dragStartCenter.x + deltaX;
+                let newY = dragStartCenter.y + deltaY;
+                const minX = HEAD_RADIUS + 18;
+                const maxX = canvas.width - HEAD_RADIUS - 18;
+                const minY = HEAD_RADIUS + 15;
+                const maxY = canvas.height - HEAD_RADIUS + 5;
+                octopusCenter.x = Math.min(maxX, Math.max(minX, newX));
+                octopusCenter.y = Math.min(maxY, Math.max(minY, newY));
+            });
+            canvas.addEventListener('touchend', () => {
+                if (isDragging) {
+                    isDragging = false;
+                    canvas.style.cursor = 'grab';
+                    resumeAutoMove();
+                }
+            });
+            canvas.style.cursor = 'grab';
+        }
+        
+        function startApp() {
+            initEvents();
+            initAutoMove();      // 启动自动游动状态
+            document.getElementById('startActionBtn').addEventListener('click', onStartButtonClick);
+            animate();
+        }
+        
+        startApp();
+    })();
+</script>
+</body>
+</html>
