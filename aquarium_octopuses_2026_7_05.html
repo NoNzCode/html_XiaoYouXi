@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小章鱼们的家 - Octopus Aquarium</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            background: linear-gradient(180deg, #87CEEB 0%, #1E90FF 50%, #00008B 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+        #aquarium {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            max-width: 1400px;
+            max-height: 900px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border-radius: 20px;
+            box-shadow: 0 0 60px rgba(0, 100, 200, 0.4), inset 0 0 100px rgba(255, 255, 255, 0.1);
+        }
+        .title {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-family: 'Comic Sans MS', 'Segoe UI', sans-serif;
+            font-size: 2rem;
+            color: white;
+            text-shadow: 2px 2px 8px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        }
+        .score {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            font-family: 'Comic Sans MS', 'Segoe UI', sans-serif;
+            font-size: 1.2rem;
+            color: #FFD700;
+            text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="aquarium">
+        <div class="title">🐙 小章鱼们的家</div>
+        <div class="score">已吃小鱼: <span id="score">0</span> 条</div>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const WIDTH = 1400;
+        const HEIGHT = 900;
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+
+        let totalEaten = 0;
+        const scoreEl = document.getElementById('score');
+
+        const octopusColors = [
+            { body: '#FF9A8B', accent: '#FF6B6B', name: '小橙' },
+            { body: '#A8E6CF', accent: '#56AB91', name: '小绿' },
+            { body: '#DDA0DD', accent: '#BA55D3', name: '小紫' },
+            { body: '#87CEEB', accent: '#5DADE2', name: '小蓝' },
+            { body: '#FFD93D', accent: '#F39C12', name: '小黄' }
+        ];
+
+        // 小鱼类
+        class Fish {
+            constructor(x, y, colorSet, shoal) {
+                this.x = x; this.y = y;
+                this.baseSize = 10 + Math.random() * 6;
+                this.size = this.baseSize;
+                this.color = colorSet.body;
+                this.accentColor = colorSet.accent;
+                this.shoal = shoal;
+                this.offsetX = (Math.random() - 0.5) * 25;
+                this.offsetY = (Math.random() - 0.5) * 20;
+                this.phase = Math.random() * Math.PI * 2;
+                this.tailPhase = Math.random() * Math.PI * 2;
+                this.alive = true;
+                this.opacity = 1;
+                this.scale = 1;
+            }
+
+            update(time, shoalCenterX, shoalCenterY) {
+                if (!this.alive) {
+                    this.opacity -= 0.15;
+                    this.scale *= 0.85;
+                    return this.opacity > 0;
+                }
+                const targetX = shoalCenterX + this.offsetX;
+                const targetY = shoalCenterY + this.offsetY;
+                this.x += (targetX - this.x) * 0.06;
+                this.y += (targetY - this.y) * 0.06;
+                this.y += Math.sin(time * 0.003 + this.phase) * 0.2;
+                return true;
+            }
+
+            draw(ctx, time, flipX) {
+                ctx.save();
+                ctx.globalAlpha = this.opacity;
+                ctx.translate(this.x, this.y);
+                ctx.scale(flipX * this.scale, this.scale);
+                const s = this.size;
+                const tailWag = Math.sin(time * 0.015 + this.tailPhase) * 0.15;
+                ctx.fillStyle = this.accentColor;
+                ctx.beginPath();
+                ctx.moveTo(-s * 0.3, 0);
+                ctx.lineTo(-s * 0.8, -s * 0.4 + tailWag * s);
+                ctx.lineTo(-s * 0.8, s * 0.4 + tailWag * s);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.ellipse(0, 0, s * 0.5, s * 0.3, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = this.accentColor;
+                ctx.beginPath();
+                ctx.ellipse(s * 0.08, -s * 0.25, s * 0.15, s * 0.12, -0.3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(s * 0.25, -s * 0.03, s * 0.1, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#1a1a2e';
+                ctx.beginPath();
+                ctx.arc(s * 0.27, -s * 0.03, s * 0.05, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 鱼群类
+        class Shoal {
+            constructor() {
+                const side = Math.floor(Math.random() * 4);
+                const fishColors = [
+                    { body: '#FFB347', accent: '#FF8C00' },
+                    { body: '#87CEFA', accent: '#4169E1' },
+                    { body: '#98FB98', accent: '#32CD32' },
+                    { body: '#FFD700', accent: '#DAA520' },
+                    { body: '#FF6B6B', accent: '#DC143C' },
+                    { body: '#DDA0DD', accent: '#BA55D3' }
+                ];
+                this.fishColors = fishColors;
+                this.fishCount = 3 + Math.floor(Math.random() * 3);
+                this.alive = true;
+                const speed = 0.6 + Math.random() * 0.5;
+                switch(side) {
+                    case 0:
+                        this.centerX = -60;
+                        this.centerY = 100 + Math.random() * (HEIGHT - 300);
+                        this.speedX = speed;
+                        this.speedY = (Math.random() - 0.5) * 0.4;
+                        break;
+                    case 1:
+                        this.centerX = WIDTH + 60;
+                        this.centerY = 100 + Math.random() * (HEIGHT - 300);
+                        this.speedX = -speed;
+                        this.speedY = (Math.random() - 0.5) * 0.4;
+                        break;
+                    case 2:
+                        this.centerX = 100 + Math.random() * (WIDTH - 200);
+                        this.centerY = -60;
+                        this.speedX = (Math.random() - 0.5) * 0.5;
+                        this.speedY = speed;
+                        break;
+                    case 3:
+                        this.centerX = 100 + Math.random() * (WIDTH - 200);
+                        this.centerY = HEIGHT + 60;
+                        this.speedX = (Math.random() - 0.5) * 0.5;
+                        this.speedY = -speed;
+                        break;
+                }
+                this.fish = [];
+                for (let i = 0; i < this.fishCount; i++) {
+                    const color = this.fishColors[Math.floor(Math.random() * this.fishColors.length)];
+                    this.fish.push(new Fish(this.centerX, this.centerY, color, this));
+                }
+            }
+
+            update(time) {
+                if (!this.alive) return false;
+                this.centerX += this.speedX;
+                this.centerY += this.speedY + Math.sin(time * 0.001) * 0.15;
+                const margin = 120;
+                if (this.centerX < -margin || this.centerX > WIDTH + margin ||
+                    this.centerY < -margin || this.centerY > HEIGHT + margin) {
+                    return false;
+                }
+                this.fish = this.fish.filter(f => f.update(time, this.centerX, this.centerY));
+                return this.fish.length > 0;
+            }
+
+            draw(ctx, time) {
+                const flipX = this.speedX > 0 ? 1 : -1;
+                this.fish.forEach(f => f.draw(ctx, time, flipX));
+            }
+
+            getBounds() {
+                return { x: this.centerX - 50, y: this.centerY - 35, width: 100, height: 70 };
+            }
+        }
+
+        // 爆炸粒子类
+        class ExplosionParticle {
+            constructor(x, y, color) {
+                this.x = x; this.y = y; this.color = color;
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10 - 3;
+                this.size = 5 + Math.random() * 5;
+                this.life = 1;
+                this.decay = 0.015 + Math.random() * 0.01;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotationSpeed = (Math.random() - 0.5) * 0.2;
+            }
+            update() {
+                this.x += this.vx; this.y += this.vy;
+                this.vy += 0.15; this.vx *= 0.98;
+                this.rotation += this.rotationSpeed;
+                this.life -= this.decay;
+                return this.life > 0;
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.size * this.life, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(255, 255, 255, ' + (this.life * 0.5) + ')';
+                ctx.beginPath();
+                ctx.arc(0, 0, this.size * this.life * 1.5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 吃鱼粒子类
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x; this.y = y; this.color = color;
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = (Math.random() - 0.5) * 5;
+                this.size = 2 + Math.random() * 3;
+                this.life = 1;
+                this.decay = 0.03 + Math.random() * 0.02;
+            }
+            update() {
+                this.x += this.vx; this.y += this.vy;
+                this.vy += 0.05; this.life -= this.decay;
+                return this.life > 0;
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size * this.life, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 章鱼类
+        class Octopus {
+            constructor(x, y, colorSet) {
+                this.x = x; this.y = y;
+                this.baseSize = 55 + Math.random() * 20;
+                this.size = this.baseSize;
+                this.targetSize = this.baseSize;
+                this.bodyColor = colorSet.body;
+                this.accentColor = colorSet.accent;
+                this.name = colorSet.name;
+                this.targetX = x; this.targetY = y;
+                this.currentVelX = 0; this.currentVelY = 0;
+                this.maxSpeed = 2.5;
+                this.acceleration = 0.05;
+                this.friction = 0.97;
+                this.phase = Math.random() * Math.PI * 2;
+                this.tentaclePhase = Math.random() * Math.PI * 2;
+                this.flipX = 1;
+                this.isEating = false;
+                this.eatTimer = 0;
+                this.happyPhase = 0;
+                this.fishEaten = 0;
+                this.targetShoal = null;
+                this.isDragging = false;
+                this.dragOffsetX = 0;
+                this.dragOffsetY = 0;
+            }
+
+            setNewTarget() {
+                const margin = this.size * 2;
+                this.targetX = margin + Math.random() * (WIDTH - margin * 2);
+                this.targetY = margin + Math.random() * (HEIGHT - margin * 2);
+            }
+
+            chaseShoal(shoal) {
+                this.targetShoal = shoal;
+                this.targetX = shoal.centerX;
+                this.targetY = shoal.centerY;
+            }
+
+            startDrag(mx, my) {
+                this.isDragging = true;
+                this.dragOffsetX = this.x - mx;
+                this.dragOffsetY = this.y - my;
+                this.currentVelX = 0;
+                this.currentVelY = 0;
+                this.targetShoal = null;
+            }
+
+            drag(mx, my) {
+                if (this.isDragging) {
+                    this.x = mx + this.dragOffsetX;
+                    this.y = my + this.dragOffsetY;
+                    const margin = this.size;
+                    this.x = Math.max(margin, Math.min(WIDTH - margin, this.x));
+                    this.y = Math.max(margin, Math.min(HEIGHT - margin, this.y));
+                }
+            }
+
+            endDrag() { this.isDragging = false; }
+
+            eat() {
+                this.isEating = true;
+                this.eatTimer = 25;
+                this.happyPhase = Math.PI;
+                this.fishEaten++;
+                this.targetSize = Math.min(this.size + 4, this.baseSize * 1.3);
+                return this.fishEaten >= 10;
+            }
+
+            explode() {
+                this.fishEaten = 0;
+                this.targetSize = this.baseSize * 0.8;
+            }
+
+            update(time, shoals, allOctopuses) {
+                if (this.isDragging) {
+                    if (this.eatTimer > 0) this.eatTimer--;
+                    if (this.eatTimer === 0) this.isEating = false;
+                    this.size += (this.targetSize - this.size) * 0.1;
+                    this.happyPhase *= 0.92;
+                    return;
+                }
+                
+                if (!this.targetShoal || !this.targetShoal.alive) {
+                    let bestShoal = null;
+                    let bestScore = Infinity;
+                    
+                    shoals.forEach(shoal => {
+                        if (!shoal.alive) return;
+                        const dx = shoal.centerX - this.x;
+                        const dy = shoal.centerY - this.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        
+                        let chasers = 0;
+                        allOctopuses.forEach(o => {
+                            if (o !== this && o.targetShoal === shoal) chasers++;
+                        });
+                        
+                        const score = dist + chasers * 200;
+                        
+                        if (score < bestScore) {
+                            bestScore = score;
+                            bestShoal = shoal;
+                        }
+                    });
+                    
+                    if (bestShoal) this.chaseShoal(bestShoal);
+                } else {
+                    this.targetX = this.targetShoal.centerX;
+                    this.targetY = this.targetShoal.centerY;
+                }
+                
+                if (!this.targetShoal || !this.targetShoal.alive) {
+                    if (Math.random() < 0.01) this.setNewTarget();
+                }
+                
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist > 5) {
+                    this.currentVelX += (dx / dist) * this.acceleration;
+                    this.currentVelY += (dy / dist) * this.acceleration;
+                }
+                
+                allOctopuses.forEach(other => {
+                    if (other === this) return;
+                    const odx = this.x - other.x;
+                    const ody = this.y - other.y;
+                    const oDist = Math.sqrt(odx * odx + ody * ody);
+                    const minDist = this.size * 0.8 + other.size * 0.8;
+                    
+                    if (oDist < minDist && oDist > 0) {
+                        const repelForce = (minDist - oDist) * 0.1;
+                        this.currentVelX += (odx / oDist) * repelForce;
+                        this.currentVelY += (ody / oDist) * repelForce;
+                    }
+                });
+                
+                const speed = Math.sqrt(this.currentVelX * this.currentVelX + this.currentVelY * this.currentVelY);
+                if (speed > this.maxSpeed) {
+                    this.currentVelX = (this.currentVelX / speed) * this.maxSpeed;
+                    this.currentVelY = (this.currentVelY / speed) * this.maxSpeed;
+                }
+                
+                this.currentVelX *= this.friction;
+                this.currentVelY *= this.friction;
+                
+                this.x += this.currentVelX;
+                this.y += this.currentVelY;
+                
+                if (Math.abs(this.currentVelX) > 0.1) {
+                    this.flipX = this.currentVelX > 0 ? 1 : -1;
+                }
+                
+                if (this.eatTimer > 0) {
+                    this.eatTimer--;
+                    if (this.eatTimer === 0) this.isEating = false;
+                }
+                
+                this.size += (this.targetSize - this.size) * 0.1;
+                this.happyPhase *= 0.92;
+                
+                const margin = this.size;
+                this.x = Math.max(margin, Math.min(WIDTH - margin, this.x));
+                this.y = Math.max(margin, Math.min(HEIGHT - margin, this.y));
+            }
+
+            draw(ctx, time) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.scale(this.flipX, 1);
+                
+                const s = this.size;
+                const eatScale = this.isEating ? 1 + Math.sin(this.eatTimer * 0.3) * 0.1 : 1;
+                ctx.scale(eatScale, eatScale);
+                
+                if (this.isDragging) {
+                    ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+                    ctx.shadowBlur = 25;
+                }
+                
+                ctx.lineCap = 'round';
+                ctx.lineWidth = s * 0.11;
+                const tentacleAngles = [-0.5, -0.25, 0, 0.25, 0.5];
+                tentacleAngles.forEach((angle, i) => {
+                    ctx.strokeStyle = this.bodyColor;
+                    ctx.beginPath();
+                    ctx.moveTo((i - 2) * s * 0.18, s * 0.28);
+                    const wave = Math.sin(time * 0.003 + this.tentaclePhase + i * 0.5) * 6;
+                    const endX = (i - 2) * s * 0.18 + Math.sin(angle) * s * 0.7;
+                    const cp1x = (i - 2) * s * 0.12;
+                    const cp1y = s * 0.5;
+                    const cp2x = endX * 0.7;
+                    const cp2y = s * 0.78;
+                    const endY = s * 0.6 + wave;
+                    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+                    ctx.stroke();
+                    ctx.fillStyle = this.accentColor;
+                    ctx.beginPath();
+                    ctx.arc(endX, endY, s * 0.06, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+                
+                const gradient = ctx.createRadialGradient(-s*0.08, -s*0.12, 0, 0, 0, s * 0.55);
+                gradient.addColorStop(0, this.lightenColor(this.bodyColor, 25));
+                gradient.addColorStop(0.7, this.bodyColor);
+                gradient.addColorStop(1, this.darkenColor(this.bodyColor, 15));
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.ellipse(0, -s * 0.08, s * 0.48, s * 0.52, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'rgba(255, 150, 150, 0.28)';
+                ctx.beginPath();
+                ctx.ellipse(-s * 0.26, s * 0.02, s * 0.1, s * 0.05, -0.2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(s * 0.26, s * 0.02, s * 0.1, s * 0.05, 0.2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.ellipse(-s * 0.14, -s * 0.1, s * 0.14, s * 0.16, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(s * 0.14, -s * 0.1, s * 0.14, s * 0.16, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                const blink = Math.sin(time * 0.002) > 0.97 ? 0.2 : 1;
+                ctx.fillStyle = '#1a1a2e';
+                ctx.beginPath();
+                ctx.ellipse(-s * 0.11, -s * 0.08, s * 0.07 * blink, s * 0.09 * blink, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(s * 0.17, -s * 0.08, s * 0.07 * blink, s * 0.09 * blink, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                if (blink > 0.5) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.beginPath();
+                    ctx.arc(-s * 0.13, -s * 0.13, s * 0.03, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(s * 0.13, -s * 0.13, s * 0.03, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                ctx.strokeStyle = this.darkenColor(this.bodyColor, 35);
+                ctx.lineWidth = 1.8 + (this.isEating ? 0.5 : 0);
+                const smileScale = this.isEating ? 1.15 : 1;
+                ctx.beginPath();
+                ctx.arc(0, s * 0.02, s * 0.12 * smileScale, 0.15 * Math.PI, 0.85 * Math.PI);
+                ctx.stroke();
+                
+                if (this.happyPhase > 0.1) {
+                    ctx.strokeStyle = '#FFD700';
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.arc(-s * 0.2, -s * 0.28, s * 0.05, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(s * 0.2, -s * 0.28, s * 0.05, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+                
+                ctx.restore();
+            }
+
+            containsPoint(px, py) {
+                const dx = px - this.x;
+                const dy = py - this.y;
+                return Math.sqrt(dx * dx + dy * dy) < this.size * 0.6;
+            }
+
+            getBounds() {
+                return { x: this.x - this.size * 0.45, y: this.y - this.size * 0.45, width: this.size * 0.9, height: this.size * 0.9 };
+            }
+
+            lightenColor(color, percent) {
+                const num = parseInt(color.replace('#', ''), 16);
+                const amt = Math.round(2.55 * percent);
+                const R = Math.min(255, (num >> 16) + amt);
+                const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
+                const B = Math.min(255, (num & 0x0000FF) + amt);
+                return 'rgb(' + R + ',' + G + ',' + B + ')';
+            }
+
+            darkenColor(color, percent) {
+                const num = parseInt(color.replace('#', ''), 16);
+                const amt = Math.round(2.55 * percent);
+                const R = Math.max(0, (num >> 16) - amt);
+                const G = Math.max(0, ((num >> 8) & 0x00FF) - amt);
+                const B = Math.max(0, (num & 0x0000FF) - amt);
+                return 'rgb(' + R + ',' + G + ',' + B + ')';
+            }
+        }
+
+        // 鲨鱼类 - 新增
+        class Shark {
+            constructor() {
+                this.x = -300;
+                this.y = HEIGHT / 2 + (Math.random() - 0.5) * 200;
+                this.size = 180;
+                this.speed = 2.2;
+                this.targetX = WIDTH + 400;
+                this.targetY = HEIGHT / 2;
+                this.flipX = 1;
+            }
+
+            update(time) {
+                // 鲨鱼缓慢巡游逻辑
+                if (this.x > WIDTH + 200) {
+                    this.x = -400;
+                    this.y = Math.random() * (HEIGHT - 300) + 150;
+                }
+                
+                this.x += this.speed * this.flipX;
+                this.y += Math.sin(time * 0.001) * 0.5;
+
+                // 简单的回头逻辑
+                if (this.x > WIDTH - 200) this.flipX = -1;
+                if (this.x < -200) this.flipX = 1;
+            }
+
+            draw(ctx, time) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.scale(this.flipX, 1);
+
+                const s = this.size;
+                
+                // 鲨鱼身体（深灰色渐变）
+                const grad = ctx.createLinearGradient(0, 0, s, 0);
+                grad.addColorStop(0, '#4a4a4a');
+                grad.addColorStop(0.5, '#7a7a7a');
+                grad.addColorStop(1, '#333333');
+                ctx.fillStyle = grad;
+
+                // 身体
+                ctx.beginPath();
+                ctx.ellipse(0, 0, s * 0.6, s * 0.3, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 头部
+                ctx.beginPath();
+                ctx.moveTo(s * 0.4, -s * 0.2);
+                ctx.lineTo(s * 1.1, 0);
+                ctx.lineTo(s * 0.4, s * 0.2);
+                ctx.fill();
+
+                // 背鳍
+                ctx.fillStyle = '#2c2c2c';
+                ctx.beginPath();
+                ctx.moveTo(-s * 0.2, -s * 0.3);
+                ctx.lineTo(-s * 0.5, -s * 0.8);
+                ctx.lineTo(-s * 0.8, -s * 0.2);
+                ctx.fill();
+
+                // 尾巴
+                ctx.beginPath();
+                ctx.moveTo(-s * 0.5, 0);
+                ctx.lineTo(-s * 1.2, -s * 0.5);
+                ctx.lineTo(-s * 1.2, s * 0.5);
+                ctx.fill();
+
+                // 眼睛
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(s * 0.7, -s * 0.1, s * 0.03, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'black';
+                ctx.beginPath();
+                ctx.arc(s * 0.73, -s * 0.1, s * 0.015, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        // 气泡类
+        class Bubble {
+            constructor() { this.reset(); this.y = Math.random() * HEIGHT; }
+            reset() {
+                this.x = Math.random() * WIDTH;
+                this.y = HEIGHT + 20;
+                this.size = 3 + Math.random() * 10;
+                this.speed = 0.3 + Math.random() * 0.8;
+                this.wobblePhase = Math.random() * Math.PI * 2;
+                this.wobbleSpeed = 0.012 + Math.random() * 0.012;
+                this.opacity = 0.25 + Math.random() * 0.3;
+            }
+            update(time) {
+                this.y -= this.speed;
+                this.x += Math.sin(time * this.wobbleSpeed + this.wobblePhase) * 0.25;
+                if (this.y < -this.size) this.reset();
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.opacity;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.beginPath();
+                ctx.arc(this.x - this.size * 0.25, this.y - this.size * 0.25, this.size * 0.25, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 水草类
+        class Seaweed {
+            constructor(x) {
+                this.x = x;
+                this.height = 70 + Math.random() * 90;
+                this.segments = 5 + Math.floor(Math.random() * 2);
+                this.phase = Math.random() * Math.PI * 2;
+                this.speed = 0.0007 + Math.random() * 0.0006;
+                this.color = this.getRandomGreen();
+            }
+            getRandomGreen() {
+                const greens = ['#228B22', '#2E8B57', '#3CB371', '#20B2AA', '#008B8B'];
+                return greens[Math.floor(Math.random() * greens.length)];
+            }
+            draw(ctx, time) {
+                ctx.save();
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                const baseY = HEIGHT;
+                ctx.beginPath();
+                ctx.moveTo(this.x, baseY);
+                for (let i = 1; i <= this.segments; i++) {
+                    const progress = i / this.segments;
+                    const wave = Math.sin(time * this.speed + this.phase + progress * 2) * 12 * progress;
+                    const y = baseY - this.height * progress;
+                    const x = this.x + wave;
+                    if (i === 1) { ctx.lineTo(x, y); }
+                    else {
+                        const prevProgress = (i - 1) / this.segments;
+                        const prevWave = Math.sin(time * this.speed + this.phase + prevProgress * 2) * 12 * prevProgress;
+                        const cpX = this.x + (wave + prevWave) / 2;
+                        const cpY = y + this.height / this.segments / 2;
+                        ctx.quadraticCurveTo(cpX, cpY, x, y);
+                    }
+                }
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        function checkCollision(rect1, rect2) {
+            return rect1.x < rect2.x + rect2.width && rect1.x + rect1.width > rect2.x &&
+                   rect1.y < rect2.y + rect2.height && rect1.y + rect1.height > rect2.y;
+        }
+
+        // 初始化
+        const octopuses = octopusColors.map((color, i) => {
+            return new Octopus(250 + (i * 220), 250 + Math.random() * 350, color);
+        });
+
+        const bubbles = Array.from({ length: 35 }, () => new Bubble());
+        const seaweeds = Array.from({ length: 10 }, () => new Seaweed(60 + Math.random() * (WIDTH - 120)));
+        let shoals = [];
+        let particles = [];
+        let explosionParticles = [];
+        let lastShoalTime = 0;
+        let shoalSpawnInterval = 800;
+
+        // 创建初始鱼群 - 12群
+        for (let i = 0; i < 12; i++) {
+            const shoal = new Shoal();
+            shoal.centerX = -80 - i * 130;
+            shoal.centerY = 100 + Math.random() * (HEIGHT - 300);
+            shoal.fish.forEach(f => {
+                f.x = shoal.centerX + f.offsetX;
+                f.y = shoal.centerY + f.offsetY;
+            });
+            shoals.push(shoal);
+        }
+
+        // 鲨鱼实例变量
+        let shark = null;
+
+        // 鼠标拖动
+        let draggedOctopus = null;
+
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = WIDTH / rect.width;
+            const scaleY = HEIGHT / rect.height;
+            if (e.touches) {
+                return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
+            }
+            return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const pos = getMousePos(e);
+            for (let i = octopuses.length - 1; i >= 0; i--) {
+                if (octopuses[i].containsPoint(pos.x, pos.y)) {
+                    draggedOctopus = octopuses[i];
+                    draggedOctopus.startDrag(pos.x, pos.y);
+                    canvas.style.cursor = 'grabbing';
+                    break;
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const pos = getMousePos(e);
+            if (draggedOctopus) {
+                draggedOctopus.drag(pos.x, pos.y);
+            } else {
+                let hovering = octopuses.some(o => o.containsPoint(pos.x, pos.y));
+                canvas.style.cursor = hovering ? 'grab' : 'default';
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            if (draggedOctopus) { draggedOctopus.endDrag(); draggedOctopus = null; }
+            canvas.style.cursor = 'default';
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            if (draggedOctopus) { draggedOctopus.endDrag(); draggedOctopus = null; }
+            canvas.style.cursor = 'default';
+        });
+
+        // 触摸支持
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const pos = getMousePos(e);
+            for (let i = octopuses.length - 1; i >= 0; i--) {
+                if (octopuses[i].containsPoint(pos.x, pos.y)) {
+                    draggedOctopus = octopuses[i];
+                    draggedOctopus.startDrag(pos.x, pos.y);
+                    break;
+                }
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (draggedOctopus) { draggedOctopus.drag(getMousePos(e).x, getMousePos(e).y); }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (draggedOctopus) { draggedOctopus.endDrag(); draggedOctopus = null; }
+        });
+
+        function drawBackground() {
+            const sandGradient = ctx.createLinearGradient(0, HEIGHT - 90, 0, HEIGHT);
+            sandGradient.addColorStop(0, 'rgba(194, 178, 128, 0)');
+            sandGradient.addColorStop(1, 'rgba(194, 178, 128, 0.55)');
+            ctx.fillStyle = sandGradient;
+            ctx.fillRect(0, HEIGHT - 90, WIDTH, 90);
+            ctx.fillStyle = 'rgba(210, 190, 140, 0.35)';
+            for (let i = 0; i < 70; i++) {
+                const x = (i * 47) % WIDTH;
+                const y = HEIGHT - 18 - Math.sin(i) * 20;
+                ctx.beginPath();
+                ctx.arc(x, y, 2 + Math.random() * 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+            for (let i = 0; i < 12; i++) {
+                const x = (i * 93 + performance.now() * 0.012) % WIDTH;
+                const y = 12 + Math.sin(i + performance.now() * 0.0007) * 6;
+                ctx.beginPath();
+                ctx.ellipse(x, y, 22 + Math.sin(i) * 6, 2, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function animate(time) {
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+            drawBackground();
+            seaweeds.forEach(sw => sw.draw(ctx, time));
+            bubbles.forEach(b => { b.update(time); b.draw(ctx); });
+            
+            shoals = shoals.filter(s => s.update(time));
+            shoals.forEach(s => s.draw(ctx, time));
+            
+            // 生成新鱼群 - 最多20群
+            if (time - lastShoalTime > shoalSpawnInterval && shoals.length < 20) {
+                shoals.push(new Shoal());
+                lastShoalTime = time;
+                shoalSpawnInterval = Math.max(300, shoalSpawnInterval - 15);
+            }
+            
+            particles = particles.filter(p => p.update());
+            particles.forEach(p => p.draw(ctx));
+            
+            explosionParticles = explosionParticles.filter(p => p.update());
+            explosionParticles.forEach(p => p.draw(ctx));
+            
+            // 鲨鱼逻辑
+            if (totalEaten >= 100 && !shark) {
+                shark = new Shark();
+            }
+            if (shark) {
+                shark.update(time);
+                shark.draw(ctx, time);
+            }
+
+            octopuses.forEach(o => {
+                o.update(time, shoals, octopuses);
+                o.draw(ctx, time);
+                
+                const octopusBounds = o.getBounds();
+                shoals.forEach(shoal => {
+                    if (!shoal.alive) return;
+                    const shoalBounds = shoal.getBounds();
+                    if (checkCollision(octopusBounds, shoalBounds)) {
+                        shoal.alive = false;
+                        for (let i = 0; i < 10; i++) {
+                            particles.push(new Particle(shoal.centerX, shoal.centerY,
+                                shoal.fishColors[Math.floor(Math.random() * shoal.fishColors.length)].body));
+                        }
+                        if (o.eat()) {
+                            for (let i = 0; i < 30; i++) {
+                                const whiteShade = 200 + Math.floor(Math.random() * 55);
+                                const color = 'rgb(' + whiteShade + ',' + whiteShade + ',' + whiteShade + ')';
+                                explosionParticles.push(new ExplosionParticle(o.x, o.y, color));
+                            }
+                            o.explode();
+                        }
+                        totalEaten += shoal.fish.length;
+                        scoreEl.textContent = totalEaten;
+                    }
+                });
+            });
+            
+            requestAnimationFrame(animate);
+        }
+
+        animate(0);
+    </script>
+</body>
+</html>
