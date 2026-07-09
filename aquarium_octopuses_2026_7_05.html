@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>小章鱼们的家 - Octopus Aquarium</title>
+    <title>小章鱼们的家 - 鲨鱼突袭</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -52,7 +52,7 @@
 </head>
 <body>
     <div id="aquarium">
-        <div class="title">🐙 小章鱼们的家</div>
+        <div class="title">🐙 小章鱼们的家 (鲨鱼突袭)</div>
         <div class="score">已吃小鱼: <span id="score">0</span> 条</div>
         <canvas id="canvas"></canvas>
     </div>
@@ -351,7 +351,7 @@
                 this.targetSize = this.baseSize * 0.8;
             }
 
-            update(time, shoals, allOctopuses) {
+            update(time, shoals, allOctopuses, shark) {
                 if (this.isDragging) {
                     if (this.eatTimer > 0) this.eatTimer--;
                     if (this.eatTimer === 0) this.isEating = false;
@@ -402,6 +402,7 @@
                     this.currentVelY += (dy / dist) * this.acceleration;
                 }
                 
+                // 1. 章鱼之间的排斥力
                 allOctopuses.forEach(other => {
                     if (other === this) return;
                     const odx = this.x - other.x;
@@ -415,6 +416,21 @@
                         this.currentVelY += (ody / oDist) * repelForce;
                     }
                 });
+
+                // 2. 强化的逃逸 AI：感知鲨鱼并逃避
+                if (shark) {
+                    const sdx = this.x - shark.x;
+                    const sdy = this.y - shark.y;
+                    const sDist = Math.sqrt(sdx * sdx + sdy * sdy);
+                    // 增加危险检测半径
+                    const dangerZone = this.size * 4 + shark.size * 0.6;
+                    
+                    if (sDist < dangerZone && sDist > 0) {
+                        const escapeForce = (dangerZone - sDist) * 0.25; // 增强逃逸力
+                        this.currentVelX += (sdx / sDist) * escapeForce;
+                        this.currentVelY += (sdy / sDist) * escapeForce;
+                    }
+                }
                 
                 const speed = Math.sqrt(this.currentVelX * this.currentVelX + this.currentVelY * this.currentVelY);
                 if (speed > this.maxSpeed) {
@@ -575,31 +591,60 @@
             }
         }
 
-        // 鲨鱼类 - 新增
+        // 鲨鱼类 - 复杂外观 + 追击AI
         class Shark {
             constructor() {
-                this.x = -300;
+                this.x = -400;
                 this.y = HEIGHT / 2 + (Math.random() - 0.5) * 200;
-                this.size = 180;
-                this.speed = 2.2;
-                this.targetX = WIDTH + 400;
-                this.targetY = HEIGHT / 2;
+                this.size = 200;
+                this.speed = 2.75; // 章鱼速度(2.5) 的 110%
                 this.flipX = 1;
+                this.targetOctopus = null;
+                this.targetX = 0;
+                this.targetY = 0;
+                this.accX = 0;
+                this.accY = 0;
             }
 
-            update(time) {
-                // 鲨鱼缓慢巡游逻辑
-                if (this.x > WIDTH + 200) {
-                    this.x = -400;
-                    this.y = Math.random() * (HEIGHT - 300) + 150;
-                }
-                
-                this.x += this.speed * this.flipX;
-                this.y += Math.sin(time * 0.001) * 0.5;
+            update(time, allOctopuses) {
+                // 寻找最近的章鱼
+                let minDist = Infinity;
+                allOctopuses.forEach(o => {
+                    const d = Math.sqrt((o.x - this.x)**2 + (o.y - this.y)**2);
+                    if (d < minDist) {
+                        minDist = d;
+                        this.targetOctopus = o;
+                    }
+                });
 
-                // 简单的回头逻辑
-                if (this.x > WIDTH - 200) this.flipX = -1;
-                if (this.x < -200) this.flipX = 1;
+                if (this.targetOctopus) {
+                    this.targetX = this.targetOctopus.x;
+                    this.targetY = this.targetOctopus.y;
+
+                    const dx = this.targetX - this.x;
+                    const dy = this.targetY - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    // 平滑转向和加速
+                    this.accX = (dx / dist) * this.speed;
+                    this.accY = (dy / dist) * this.speed;
+                    
+                    this.x += this.accX;
+                    this.y += this.accY;
+                } else {
+                    // 没找到目标时的备选巡游
+                    this.x += this.speed * this.flipX;
+                    if (this.x > WIDTH + 200) { this.x = -400; this.y = Math.random() * HEIGHT; }
+                    if (this.x < -400) this.x = WIDTH + 400;
+                }
+
+                // 边界处理
+                if (this.y < -100) this.y = HEIGHT + 100;
+                if (this.y > HEIGHT + 100) this.y = -100;
+
+                // 自动翻转方向
+                if (this.accX > 0) this.flipX = 1;
+                if (this.accX < 0) this.flipX = -1;
             }
 
             draw(ctx, time) {
@@ -609,51 +654,63 @@
 
                 const s = this.size;
                 
-                // 鲨鱼身体（深灰色渐变）
-                const grad = ctx.createLinearGradient(0, 0, s, 0);
-                grad.addColorStop(0, '#4a4a4a');
-                grad.addColorStop(0.5, '#7a7a7a');
-                grad.addColorStop(1, '#333333');
-                ctx.fillStyle = grad;
+                // 绘制身体 (带反荫蔽色渐变)
+                const bodyGrad = ctx.createLinearGradient(0, -s*0.3, 0, s*0.3);
+                bodyGrad.addColorStop(0, '#333333'); // 背部深色
+                bodyGrad.addColorStop(0.5, '#666666');
+                bodyGrad.addColorStop(1, '#ffffff'); // 腹部白色
+                ctx.fillStyle = bodyGrad;
 
-                // 身体
+                // 身体主轮廓
                 ctx.beginPath();
-                ctx.ellipse(0, 0, s * 0.6, s * 0.3, 0, 0, Math.PI * 2);
+                ctx.ellipse(0, 0, s * 0.7, s * 0.35, 0, 0, Math.PI * 2);
                 ctx.fill();
 
-                // 头部
+                // 头部 (吻部)
+                ctx.fillStyle = '#222222';
                 ctx.beginPath();
                 ctx.moveTo(s * 0.4, -s * 0.2);
                 ctx.lineTo(s * 1.1, 0);
                 ctx.lineTo(s * 0.4, s * 0.2);
                 ctx.fill();
 
-                // 背鳍
-                ctx.fillStyle = '#2c2c2c';
+                // 背鳍 (动态角度)
+                ctx.fillStyle = '#111111';
                 ctx.beginPath();
-                ctx.moveTo(-s * 0.2, -s * 0.3);
-                ctx.lineTo(-s * 0.5, -s * 0.8);
-                ctx.lineTo(-s * 0.8, -s * 0.2);
+                ctx.moveTo(-s * 0.1, -s * 0.3);
+                ctx.quadraticCurveTo(-s * 0.4, -s * 0.9, -s * 0.8, -s * 0.2);
                 ctx.fill();
 
-                // 尾巴
+                // 侧鳍
+                ctx.beginPath();
+                ctx.moveTo(-s * 0.3, s * 0.1);
+                ctx.lineTo(-s * 0.6, s * 0.5);
+                ctx.lineTo(-s * 0.1, s * 0.3);
+                ctx.fill();
+
+                // 尾巴 (叉状)
                 ctx.beginPath();
                 ctx.moveTo(-s * 0.5, 0);
-                ctx.lineTo(-s * 1.2, -s * 0.5);
-                ctx.lineTo(-s * 1.2, s * 0.5);
+                ctx.lineTo(-s * 1.3, -s * 0.6);
+                ctx.lineTo(-s * 1.3, s * 0.6);
+                ctx.closePath();
                 ctx.fill();
 
                 // 眼睛
                 ctx.fillStyle = 'white';
                 ctx.beginPath();
-                ctx.arc(s * 0.7, -s * 0.1, s * 0.03, 0, Math.PI * 2);
+                ctx.arc(s * 0.75, -s * 0.1, s * 0.04, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.fillStyle = 'black';
                 ctx.beginPath();
-                ctx.arc(s * 0.73, -s * 0.1, s * 0.015, 0, Math.PI * 2);
+                ctx.arc(s * 0.78, -s * 0.1, s * 0.015, 0, Math.PI * 2);
                 ctx.fill();
 
                 ctx.restore();
+            }
+
+            getBounds() {
+                return { x: this.x - this.size * 0.8, y: this.y - this.size * 0.5, width: this.size * 1.6, height: this.size * 1.0 };
             }
         }
 
@@ -748,7 +805,6 @@
         let lastShoalTime = 0;
         let shoalSpawnInterval = 800;
 
-        // 创建初始鱼群 - 12群
         for (let i = 0; i < 12; i++) {
             const shoal = new Shoal();
             shoal.centerX = -80 - i * 130;
@@ -760,10 +816,8 @@
             shoals.push(shoal);
         }
 
-        // 鲨鱼实例变量
         let shark = null;
 
-        // 鼠标拖动
         let draggedOctopus = null;
 
         function getMousePos(e) {
@@ -808,7 +862,6 @@
             canvas.style.cursor = 'default';
         });
 
-        // 触摸支持
         canvas.addEventListener('touchstart', (e) => {
             e.preventDefault();
             const pos = getMousePos(e);
@@ -864,7 +917,6 @@
             shoals = shoals.filter(s => s.update(time));
             shoals.forEach(s => s.draw(ctx, time));
             
-            // 生成新鱼群 - 最多20群
             if (time - lastShoalTime > shoalSpawnInterval && shoals.length < 20) {
                 shoals.push(new Shoal());
                 lastShoalTime = time;
@@ -881,13 +933,28 @@
             if (totalEaten >= 100 && !shark) {
                 shark = new Shark();
             }
+            
             if (shark) {
-                shark.update(time);
+                shark.update(time, octopuses);
                 shark.draw(ctx, time);
+
+                // 鲨鱼碰撞检测
+                const sharkBounds = shark.getBounds();
+                octopuses.forEach(o => {
+                    const oBounds = o.getBounds();
+                    if (checkCollision(oBounds, sharkBounds)) {
+                        // 被碰到后章鱼变小
+                        o.targetSize = o.baseSize * 0.7;
+                        o.explode(); // 触发爆炸效果
+                        // 瞬间推开一点点
+                        o.x += (o.x - shark.x) * 0.3;
+                        o.y += (o.y - shark.y) * 0.3;
+                    }
+                });
             }
 
             octopuses.forEach(o => {
-                o.update(time, shoals, octopuses);
+                o.update(time, shoals, octopuses, shark);
                 o.draw(ctx, time);
                 
                 const octopusBounds = o.getBounds();
