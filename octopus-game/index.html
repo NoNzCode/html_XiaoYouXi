@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>章鱼游戏 - 海底大冒险</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #001a33; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; }
+  #gameCanvas { display: block; cursor: crosshair; }
+
+  /* HUD */
+  #hud { position: absolute; top: 0; left: 0; width: 100%; pointer-events: none; z-index: 10; }
+  #score { position: absolute; top: 20px; left: 30px; font-size: 42px; font-weight: 900; color: #fff; text-shadow: 2px 2px 0 #0066aa, -2px -2px 0 #0066aa, 2px -2px 0 #0066aa, -2px 2px 0 #0066aa; }
+  #score .label { font-size: 18px; font-weight: 600; opacity: 0.85; display: block; }
+  #controlHint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,40,80,0.55); padding: 10px 28px; border-radius: 30px; color: #cce8ff; font-size: 16px; font-weight: 500; white-space: nowrap; }
+  #controlHint kbd { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 5px; padding: 2px 8px; font-size: 15px; color: #fff; margin: 0 2px; }
+
+  /* Score popup */
+  .scorePopup { position: absolute; font-size: 28px; font-weight: 900; color: #ffdd00; text-shadow: 2px 2px 0 #c0392b; pointer-events: none; z-index: 5; animation: scorePopupAnim 1s ease-out forwards; }
+  @keyframes scorePopupAnim { 0% { transform: translateY(0) scale(0.5); opacity: 0; } 20% { transform: translateY(-10px) scale(1.2); opacity: 1; } 100% { transform: translateY(-60px) scale(1); opacity: 0; } }
+
+  /* Start screen */
+  #startScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,10,30,0.6); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 150; cursor: pointer; }
+  #startScreen h1 { font-size: 64px; color: #fff; text-shadow: 3px 3px 0 #0066aa, -3px -3px 0 #0066aa, 3px -3px 0 #0066aa, -3px 3px 0 #0066aa; margin-bottom: 12px; }
+  #startScreen .subtitle { font-size: 22px; color: #cce8ff; margin-bottom: 40px; }
+  #startScreen .clickHint { font-size: 28px; color: #ffdd00; font-weight: 700; animation: clickPulse 1.2s ease-in-out infinite; }
+  @keyframes clickPulse { 0%, 100% { transform: scale(1); opacity: 0.8; } 50% { transform: scale(1.1); opacity: 1; } }
+  #startScreen .rules { margin-top: 30px; font-size: 16px; color: #88bbdd; text-align: center; line-height: 1.8; }
+
+  /* Loading */
+  #loading { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(180deg, #4fc3f7, #0277bd); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 200; color: #fff; }
+  #loading .spinner { width: 60px; height: 60px; border: 6px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 20px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { font-size: 20px; font-weight: 600; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<div id="hud">
+  <div id="score"><span class="label">得分</span><span id="scoreVal">0</span></div>
+  <div id="controlHint">
+    <kbd>WASD</kbd>/<kbd>方向键</kbd> 移动鲨鱼 · <kbd>R</kbd> 重新开始 · 鲨鱼吃鱼/章鱼/水母得分
+  </div>
+</div>
+
+<div id="startScreen">
+  <h1>海底大冒险</h1>
+  <div class="subtitle">你是鲨鱼，尽情吃掉鱼群、章鱼和水母吧！</div>
+  <div class="clickHint">点击屏幕开始游戏</div>
+  <div class="rules">
+    鲨鱼吃章鱼 / 水母 &nbsp;+10 分 · 吃鱼 &nbsp;+2 分<br>
+    章鱼 / 水母会吃小鱼，但不算得分<br>
+    用 WASD 或方向键控制鲨鱼移动
+  </div>
+</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>正在加载海底世界...</p>
+</div>
+
+<script>
+'use strict';
+// ============================================================
+// 章鱼游戏 - 海底大冒险
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---- 画布自适应 ----
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ---- 图像资源 ----
+const ASSETS = {
+  octopus:   'assets/octopus.png',
+  jellyfish: 'assets/jellyfish.png',
+  shark:     'assets/shark.png',
+  fish:      'assets/fish.png',
+  seabed:    'assets/seabed.png'
+};
+
+const images = {};
+
+function loadImage(key, src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { images[key] = img; resolve(); };
+    img.onerror = () => { console.error('Failed to load:', src); resolve(); };
+    img.src = src;
+  });
+}
+
+// ---- 游戏状态 ----
+let gameState = {
+  score: 0,
+  gameStarted: false,
+  playerEntity: null,
+  entities: [],
+  bubbles: []
+};
+
+// ---- 实体类型定义 ----
+// 速度层级: 鲨鱼(1.0) > 章鱼/水母(0.6) > 鱼群(0.3)
+const SPEED_BASE = 5.0;
+const ENTITY_TYPES = {
+  shark:     { radius: 100, speed: SPEED_BASE * 1.0, eats: ['octopus','jellyfish','fish'], score: 10, name: '鲨鱼' },
+  octopus:   { radius: 28, speed: SPEED_BASE * 0.6, eats: ['fish'], score: 5, name: '章鱼' },
+  jellyfish: { radius: 30, speed: SPEED_BASE * 0.6, eats: ['fish'], score: 5, name: '水母' },
+  fish:      { radius: 15, speed: SPEED_BASE * 0.3, eats: [], score: 2, name: '小鱼' }
+};
+
+// ---- 实体类 ----
+class Entity {
+  constructor(type, x, y, isPlayer = false) {
+    this.type = type;
+    this.config = ENTITY_TYPES[type];
+    this.x = x;
+    this.y = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.radius = this.config.radius;
+    this.speed = this.config.speed;
+    this.angle = Math.random() * Math.PI * 2;
+    this.isAlive = true;
+    this.respawnTimer = 0;
+    this.isPlayer = isPlayer;
+    this.sprite = images[type];
+    this.imgRatio = (this.sprite && this.sprite.width && this.sprite.height)
+      ? this.sprite.width / this.sprite.height : 1;
+    this.baseDirection = Math.random() < 0.5 ? 1 : -1;
+    this.wanderAngle = (this.baseDirection === 1 ? 0 : Math.PI) + (Math.random() - 0.5) * 0.3;
+    // 鱼群方向变化频率大幅降低
+    this.wanderTimer = this.type === 'fish'
+      ? 300 + Math.floor(Math.random() * 300)
+      : 90 + Math.floor(Math.random() * 90);
+    this.flashTimer = 0;
+  }
+
+  update(dt) {
+    if (!this.isAlive) {
+      this.respawnTimer -= dt;
+      if (this.respawnTimer <= 0) {
+        this.respawn();
+      }
+      return;
+    }
+
+    if (this.flashTimer > 0) this.flashTimer -= dt;
+
+    if (this.isPlayer) {
+      this.updatePlayer();
+    } else {
+      this.updateAI();
+    }
+
+    this.x += this.vx;
+    this.y += this.vy;
+
+    if (this.isPlayer) {
+      if (this.x < this.radius) { this.x = this.radius; this.vx = 0; }
+      if (this.x > canvas.width - this.radius) { this.x = canvas.width - this.radius; this.vx = 0; }
+      if (this.y < this.radius) { this.y = this.radius; this.vy = 0; }
+      if (this.y > canvas.height - this.radius) { this.y = canvas.height - this.radius; this.vy = 0; }
+    } else {
+      const margin = this.radius * 3;
+      if (this.x < -margin || this.x > canvas.width + margin ||
+          this.y < -margin || this.y > canvas.height + margin) {
+        this.respawnFromEdge();
+      }
+    }
+
+    if (Math.abs(this.vx) > 0.1 || Math.abs(this.vy) > 0.1) {
+      this.angle = Math.atan2(this.vy, this.vx);
+    }
+  }
+
+  updatePlayer() {
+    const sp = this.speed;
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['arrowup']) dy -= 1;
+    if (keys['s'] || keys['arrowdown']) dy += 1;
+    if (keys['a'] || keys['arrowleft']) dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+
+    if (dx !== 0 || dy !== 0) {
+      const len = Math.sqrt(dx*dx + dy*dy);
+      this.vx = (dx / len) * sp;
+      this.vy = (dy / len) * sp;
+    } else {
+      this.vx *= 0.85;
+      this.vy *= 0.85;
+    }
+  }
+
+  updateAI() {
+    const sp = this.speed;
+
+    if (this.type === 'octopus' || this.type === 'jellyfish') {
+      // 章鱼/水母：躲避鲨鱼 + 追鱼
+      const shark = this.findNearest(['shark']);
+      if (shark) {
+        const dx = this.x - shark.x;
+        const dy = this.y - shark.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 110) {
+          if (dist > 0) {
+            // 逃逸速度减半，并用插值平滑方向，避免左右摆动
+            const targetVx = (dx / dist) * sp * 0.6;
+            const targetVy = (dy / dist) * sp * 0.6;
+            this.vx = this.vx * 0.85 + targetVx * 0.15;
+            this.vy = this.vy * 0.85 + targetVy * 0.15;
+          }
+          return;
+        }
+      }
+      // 追鱼
+      const fish = this.findNearest(['fish']);
+      if (fish) {
+        const fdx = fish.x - this.x;
+        const fdy = fish.y - this.y;
+        const fdist = Math.sqrt(fdx*fdx + fdy*fdy);
+        if (fdist > 0) {
+          this.vx = (fdx / fdist) * sp;
+          this.vy = (fdy / fdist) * sp;
+        }
+      } else {
+        this.wander(sp * 0.7);
+      }
+    } else if (this.type === 'fish') {
+      // 鱼群：不躲避捕食者，只平稳游动
+      this.wander(sp * 0.8);
+    }
+  }
+
+  // wander - 平滑游动，鱼群方向变化频率大幅降低
+  wander(speed) {
+    this.wanderTimer--;
+    if (this.wanderTimer <= 0) {
+      if (this.type === 'fish') {
+        // 鱼群：5~10秒才变方向，10%概率反转，角度偏移小
+        if (Math.random() < 0.1) {
+          this.baseDirection *= -1;
+        }
+        const baseAngle = this.baseDirection === 1 ? 0 : Math.PI;
+        this.wanderAngle = baseAngle + (Math.random() - 0.5) * 0.4;
+        this.wanderTimer = 300 + Math.floor(Math.random() * 300);
+      } else {
+        this.wanderAngle += (Math.random() - 0.5) * 0.3;
+        this.wanderTimer = 90 + Math.floor(Math.random() * 90);
+      }
+    }
+    this.vx = Math.cos(this.wanderAngle) * speed;
+    this.vy = Math.sin(this.wanderAngle) * speed;
+  }
+
+  findNearest(types) {
+    let nearest = null;
+    let minDist = Infinity;
+    for (const e of gameState.entities) {
+      if (!e.isAlive) continue;
+      if (!types.includes(e.type)) continue;
+      const dx = e.x - this.x;
+      const dy = e.y - this.y;
+      const dist = dx*dx + dy*dy;
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = e;
+      }
+    }
+    return nearest;
+  }
+
+  die() {
+    this.isAlive = false;
+    this.respawnTimer = 2000;
+    this.vx = 0;
+    this.vy = 0;
+  }
+
+  respawn() {
+    this.isAlive = true;
+    this.flashTimer = 500;
+    // 被吃后从屏幕外边缘重生，游入视图
+    this.respawnFromEdge();
+  }
+
+  respawnFromEdge() {
+    const side = Math.floor(Math.random() * 4);
+    const margin = this.radius * 2;
+    switch (side) {
+      case 0:
+        this.x = Math.random() * canvas.width;
+        this.y = -margin;
+        this.wanderAngle = Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+        break;
+      case 1:
+        this.x = Math.random() * canvas.width;
+        this.y = canvas.height + margin;
+        this.wanderAngle = -Math.PI / 2 + (Math.random() - 0.5) * 0.5;
+        break;
+      case 2:
+        this.x = -margin;
+        this.y = Math.random() * canvas.height;
+        this.wanderAngle = (Math.random() - 0.5) * 0.5;
+        this.baseDirection = 1;
+        break;
+      case 3:
+        this.x = canvas.width + margin;
+        this.y = Math.random() * canvas.height;
+        this.wanderAngle = Math.PI + (Math.random() - 0.5) * 0.5;
+        this.baseDirection = -1;
+        break;
+    }
+    const speed = this.speed * 0.8;
+    this.vx = Math.cos(this.wanderAngle) * speed;
+    this.vy = Math.sin(this.wanderAngle) * speed;
+  }
+
+  draw() {
+    if (!this.isAlive) return;
+
+    const img = this.sprite;
+    if (!img) return;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    if (this.type === 'fish') {
+      // 鱼图默认朝左，向右游时翻转，使鱼始终面朝游动方向
+      if (this.vx > 0) {
+        ctx.scale(-1, 1);
+      }
+    } else {
+      // 其他精灵默认朝右，向左游时翻转
+      if (this.vx < 0) {
+        ctx.scale(-1, 1);
+      }
+    }
+
+    if (this.flashTimer > 0) {
+      ctx.globalAlpha = 0.4 + 0.3 * Math.sin(this.flashTimer * 0.03);
+    }
+
+    if (this.isPlayer) {
+      ctx.shadowColor = '#ffdd00';
+      ctx.shadowBlur = 25;
+    }
+
+    const maxW = this.radius * 2.5;
+    let drawW, drawH;
+    if (this.imgRatio > 1) {
+      drawW = maxW;
+      drawH = maxW / this.imgRatio;
+    } else {
+      drawH = maxW;
+      drawW = maxW * this.imgRatio;
+    }
+    ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.restore();
+
+    if (this.isPlayer) {
+      ctx.save();
+      ctx.fillStyle = '#ffdd00';
+      ctx.strokeStyle = '#c0392b';
+      ctx.lineWidth = 2;
+      const arrowY = this.y - this.radius * 1.6;
+      ctx.beginPath();
+      ctx.moveTo(this.x, arrowY + 12);
+      ctx.lineTo(this.x - 8, arrowY);
+      ctx.lineTo(this.x + 8, arrowY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+// ---- 输入处理 ----
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  const key = e.key.toLowerCase();
+  keys[key] = true;
+
+  // R键随时重新开始
+  if (key === 'r' && gameState.gameStarted) {
+    startGame();
+  }
+
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(key)) {
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+// ---- 碰撞检测（捕食关系）----
+function checkCollisions() {
+  const ents = gameState.entities;
+  for (let i = 0; i < ents.length; i++) {
+    const a = ents[i];
+    if (!a.isAlive || a.flashTimer > 0) continue;
+
+    for (let j = 0; j < ents.length; j++) {
+      if (i === j) continue;
+      const b = ents[j];
+      if (!b.isAlive) continue;
+      if (!a.config.eats.includes(b.type)) continue;
+      if (b.flashTimer > 0) continue;
+
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < a.radius + b.radius * 0.6) {
+        eatEntity(a, b);
+      }
+    }
+  }
+}
+
+// ---- 防重叠：非捕食关系的实体之间不允许重叠 ----
+function resolveOverlaps() {
+  const ents = gameState.entities;
+  for (let i = 0; i < ents.length; i++) {
+    const a = ents[i];
+    if (!a.isAlive) continue;
+    for (let j = i + 1; j < ents.length; j++) {
+      const b = ents[j];
+      if (!b.isAlive) continue;
+      // 跳过捕食关系（由碰撞检测处理）
+      if (a.config.eats.includes(b.type) || b.config.eats.includes(a.type)) continue;
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const minDist = (a.radius + b.radius) * 0.9;
+      if (dist < minDist && dist > 0.01) {
+        const overlap = minDist - dist;
+        const nx = dx / dist;
+        const ny = dy / dist;
+        if (a.isPlayer && !b.isPlayer) {
+          // 玩家不动，推开对方
+          b.x += nx * overlap;
+          b.y += ny * overlap;
+        } else if (b.isPlayer && !a.isPlayer) {
+          a.x -= nx * overlap;
+          a.y -= ny * overlap;
+        } else {
+          // 双方各退一半
+          a.x -= nx * overlap * 0.5;
+          a.y -= ny * overlap * 0.5;
+          b.x += nx * overlap * 0.5;
+          b.y += ny * overlap * 0.5;
+        }
+      }
+    }
+  }
+}
+
+function eatEntity(eater, prey) {
+  // 积分只算鲨鱼
+  if (eater.type === 'shark') {
+    const score = ENTITY_TYPES[prey.type].score;
+    gameState.score += score;
+    showScorePopup(prey.x, prey.y, '+' + score);
+  }
+
+  prey.die();
+  updateScoreDisplay();
+}
+
+function showScorePopup(x, y, text) {
+  const popup = document.createElement('div');
+  popup.className = 'scorePopup';
+  popup.textContent = text;
+  popup.style.left = x + 'px';
+  popup.style.top = y + 'px';
+  document.body.appendChild(popup);
+  setTimeout(() => popup.remove(), 1000);
+}
+
+function updateScoreDisplay() {
+  document.getElementById('scoreVal').textContent = gameState.score;
+}
+
+// ---- 背景气泡装饰 ----
+function initBubbles() {
+  gameState.bubbles = [];
+  for (let i = 0; i < 25; i++) {
+    gameState.bubbles.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      r: 3 + Math.random() * 8,
+      speed: 0.3 + Math.random() * 0.8,
+      drift: (Math.random() - 0.5) * 0.5
+    });
+  }
+}
+
+function updateBubbles() {
+  for (const b of gameState.bubbles) {
+    b.y -= b.speed;
+    b.x += b.drift;
+    if (b.y < -10) {
+      b.y = canvas.height + 10;
+      b.x = Math.random() * canvas.width;
+    }
+  }
+}
+
+function drawBubbles() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  for (const b of gameState.bubbles) {
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---- 背景绘制 ----
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#4fc3f7');
+  grad.addColorStop(0.5, '#0288d1');
+  grad.addColorStop(1, '#01579b');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (images.seabed) {
+    const img = images.seabed;
+    const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+  }
+}
+
+// ---- 游戏初始化 ----
+function startGame() {
+  gameState.score = 0;
+  gameState.gameStarted = true;
+  gameState.entities = [];
+
+  document.getElementById('startScreen').style.display = 'none';
+  updateScoreDisplay();
+
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  // 玩家控制鲨鱼
+  const shark = new Entity('shark', cx, cy, true);
+
+  // 章鱼3只、水母2只
+  const octopus1 = new Entity('octopus', cx - 250, cy - 100);
+  const octopus2 = new Entity('octopus', cx + 200, cy + 150);
+  const octopus3 = new Entity('octopus', cx - 100, cy + 200);
+  const jellyfish1 = new Entity('jellyfish', cx - 150, cy + 120);
+  const jellyfish2 = new Entity('jellyfish', cx + 300, cy - 80);
+
+  gameState.entities.push(shark, octopus1, octopus2, octopus3, jellyfish1, jellyfish2);
+  gameState.playerEntity = shark;
+
+  // 鱼群30条
+  for (let i = 0; i < 30; i++) {
+    const fx = 50 + Math.random() * (canvas.width - 100);
+    const fy = 50 + Math.random() * (canvas.height - 100);
+    const fish = new Entity('fish', fx, fy);
+    gameState.entities.push(fish);
+  }
+
+  initBubbles();
+}
+
+// ---- 游戏主循环 ----
+let lastTime = performance.now();
+let gameLoopStarted = false;
+
+function gameLoop(now) {
+  const dt = now - lastTime;
+  lastTime = now;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBackground();
+  updateBubbles();
+  drawBubbles();
+
+  if (gameState.gameStarted) {
+    // 更新实体
+    for (const e of gameState.entities) {
+      e.update(dt);
+    }
+    // 防重叠
+    resolveOverlaps();
+    // 碰撞检测（捕食）
+    checkCollisions();
+  }
+
+  // 绘制实体（鱼群在底层，捕食者在上层）
+  const fishList = gameState.entities.filter(e => e.type === 'fish');
+  const predatorList = gameState.entities.filter(e => e.type !== 'fish');
+  for (const f of fishList) f.draw();
+  for (const p of predatorList) p.draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+// ---- 启动 ----
+async function init() {
+  const loadPromises = Object.entries(ASSETS).map(([key, src]) => loadImage(key, src));
+  await Promise.all(loadPromises);
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('startScreen').style.display = 'flex';
+
+  if (!gameLoopStarted) {
+    gameLoopStarted = true;
+    lastTime = performance.now();
+    requestAnimationFrame(gameLoop);
+  }
+
+  document.getElementById('startScreen').addEventListener('click', () => {
+    startGame();
+  });
+}
+
+init();
+</script>
+</body>
+</html>
